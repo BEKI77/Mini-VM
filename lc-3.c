@@ -10,12 +10,6 @@
 #include <sys/termios.h>
 #include <sys/mman.h>
 
-
-#define MEMORY_MAX (1<<16)
-
-
-uint16_t memory[MEMORY_MAX];
-
 enum
 {
     R_R0 = 0,
@@ -31,34 +25,39 @@ enum
     R_COUNT
 };
 
-uint16_t reg[R_COUNT];
-
-enum
-{
-    OP_BR = 0, /* branch */
-    OP_ADD,    /* add  */
-    OP_LD,     /* load */
-    OP_ST,     /* store */
-    OP_JSR,    /* jump register */
-    OP_AND,    /* bitwise and */
-    OP_LDR,    /* load register */
-    OP_STR,    /* store register */
-    OP_RTI,    /* unused */
-    OP_NOT,    /* bitwise not */
-    OP_LDI,    /* load indirect */
-    OP_STI,    /* store indirect */
-    OP_JMP,    /* jump */
-    OP_RES,    /* reserved (unused) */
-    OP_LEA,    /* load effective address */
-    OP_TRAP    /* execute trap */
-};
-
 enum
 {
     FL_POS = 1 << 0, /* P */
     FL_ZRO = 1 << 1, /* Z */
     FL_NEG = 1 << 2, /* N */
 };
+
+enum
+{
+    OP_ADD  = 0b0001,
+    OP_AND  = 0b0101,
+    OP_BR   = 0b0000,
+    OP_JMP  = 0b1100,
+    OP_JSR  = 0b0100,
+    OP_LD   = 0b0010,
+    OP_LDI  = 0b1010,
+    OP_LDR  = 0b0110,
+    OP_LEA  = 0b1110,
+    OP_NOT  = 0b1001,
+    OP_RTI  = 0b1000,
+    OP_ST   = 0b0011,
+    OP_STI  = 0b1011,
+    OP_STR  = 0b0111,
+    OP_TRAP = 0b1111,
+    OP_RESERVED = 0b1101,
+};
+
+enum
+{
+    MR_KBSR = 0xFE00, /* keyboard status */
+    MR_KBDR = 0xFE02  /* keyboard data */
+};
+
 
 enum
 {
@@ -70,14 +69,125 @@ enum
     TRAP_HALT = 0x25   /* halt the program */
 };
 
+#define MEMORY_MAX (1 << 16)
+uint16_t memory[MEMORY_MAX];  /* 65536 locations */
+uint16_t reg[R_COUNT];
 
-enum
+
+
+struct termios original_tio;
+
+void disable_input_buffering()
 {
-    MR_KBSR = 0xFE00, /* keyboard status */
-    MR_KBDR = 0xFE02  /* keyboard data */
-};
+    tcgetattr(STDIN_FILENO, &original_tio);
+    struct termios new_tio = original_tio;
+    new_tio.c_lflag &= ~ICANON & ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+}
 
+void restore_input_buffering()
+{
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_tio);
+}
 
+uint16_t check_key()
+{
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+    return select(1, &readfds, NULL, NULL, &timeout) != 0;
+}
+
+void handle_interrupt(int signal)
+{
+    restore_input_buffering();
+    printf("\n");
+    exit(-2);
+}
+
+uint16_t sign_extend(uint16_t x, int bit_count)
+{
+    if ((x >> (bit_count - 1)) & 1) {
+        x |= (0xFFFF << bit_count);
+    }
+    return x;
+}
+
+uint16_t swap16(uint16_t x)
+{
+    return (x << 8) | (x >> 8);
+}
+
+void update_flags(uint16_t r)
+{
+    if (reg[r] == 0)
+    {
+        reg[R_COND] = FL_ZRO;
+    }
+    else if (reg[r] >> 15) /* a 1 in the left-most bit indicates negative */
+    {
+        reg[R_COND] = FL_NEG;
+    }
+    else
+    {
+        reg[R_COND] = FL_POS;
+    }
+}
+
+void read_image_file(FILE* file)
+{
+    /* the origin tells us where in memory to place the image */
+    uint16_t origin;
+    fread(&origin, sizeof(origin), 1, file);
+    origin = swap16(origin);
+
+    /* we know the maximum file size so we only need one fread */
+    uint16_t max_read = MEMORY_MAX - origin;
+    uint16_t* p = memory + origin;
+    size_t read = fread(p, sizeof(uint16_t), max_read, file);
+
+    /* swap to little endian */
+    while (read-- > 0)
+    {
+        *p = swap16(*p);
+        ++p;
+    }
+}
+
+int read_image(const char* image_path)
+{
+    FILE* file = fopen(image_path, "rb");
+    if (!file) { return 0; };
+    read_image_file(file);
+    fclose(file);
+    return 1;
+}
+
+void mem_write(uint16_t address, uint16_t val)
+{
+    memory[address] = val;
+}
+
+uint16_t mem_read(uint16_t address)
+{
+    if (address == MR_KBSR)
+    {
+        if (check_key())
+        {
+            memory[MR_KBSR] = (1 << 15);
+            memory[MR_KBDR] = getchar();
+        }
+        else
+        {
+            memory[MR_KBSR] = 0;
+        }
+    }
+    return memory[address];
+}
 
 int main(int argc, const char* argv[]){
     if(argc<2){
@@ -319,7 +429,6 @@ int main(int argc, const char* argv[]){
                     }
                 }
                 break;
-            case OP_RES:
             case OP_RTI:
             default:
                 // {BAD OPCODE}
@@ -329,120 +438,7 @@ int main(int argc, const char* argv[]){
     }
     // {Shutdown}
     restore_input_buffering();
+    return 0;
 }
 
 
-/**** 
- * The immediate mode value has only 5 bits, but it needs to be added to a 16-bit number.
- * To do the addition, those 5 bits need to be extended to 16 to match the other number. 
- * Sign extension corrects this problem by filling in 0’s for positive numbers and 1’s for 
- * negative numbers, 
-****/
-
-uint16_t sign_extend(uint16_t x, int bit_count){
-    if ((x >> (bit_count - 1)) & 1) {
-        x |= (0xFFFF << bit_count);
-    }
-    return x;
-}
-
-
-/****
- *  Any time a value is written to a register, we need to update the flags to indicate its sign.
-****/
-void update_flags(uint16_t r){
-    if (reg[r] == 0){
-        reg[R_COND] = FL_ZRO;
-    }else if (reg[r] >> 15) /* a 1 in the left-most bit indicates negative */
-    {
-        reg[R_COND] = FL_NEG;
-    }else{
-        reg[R_COND] = FL_POS;
-    }
-}
-
-
-void read_image_file(FILE* file){
-    /* the origin tells us where in memory to place the image */
-    uint16_t origin;
-    fread(&origin, sizeof(origin), 1, file);
-    origin = swap16(origin);
-
-    /* we know the maximum file size so we only need one fread */
-    uint16_t max_read = MEMORY_MAX - origin;
-    uint16_t* p = memory + origin;
-    size_t read = fread(p, sizeof(uint16_t), max_read, file);
-
-    /* swap to little endian */
-    while (read-- > 0)
-    {
-        *p = swap16(*p);
-        ++p;
-    }
-}
-
-uint16_t swap16(uint16_t x){
-    return (x << 8) | (x >> 8);
-}
-
-int read_image(const char* image_path){
-    FILE* file = fopen(image_path, "rb");
-    if (!file) { return 0; };
-    read_image_file(file);
-    fclose(file);
-    return 1;
-}
-
-void mem_write(uint16_t address, uint16_t val){
-    memory[address] = val;
-}
-
-uint16_t mem_read(uint16_t address){
-    if (address == MR_KBSR)
-    {
-        if (check_key())
-        {
-            memory[MR_KBSR] = (1 << 15);
-            memory[MR_KBDR] = getchar();
-        }
-        else
-        {
-            memory[MR_KBSR] = 0;
-        }
-    }
-    return memory[address];
-}
-
-struct termios original_tio;
-
-void disable_input_buffering()
-{
-    tcgetattr(STDIN_FILENO, &original_tio);
-    struct termios new_tio = original_tio;
-    new_tio.c_lflag &= ~ICANON & ~ECHO;
-    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-}
-
-void restore_input_buffering()
-{
-    tcsetattr(STDIN_FILENO, TCSANOW, &original_tio);
-}
-
-uint16_t check_key()
-{
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(STDIN_FILENO, &readfds);
-
-    struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-    return select(1, &readfds, NULL, NULL, &timeout) != 0;
-}
-
-void handle_interrupt(int signal)
-{
-    restore_input_buffering();
-    printf("\n");
-    exit(-2);
-}

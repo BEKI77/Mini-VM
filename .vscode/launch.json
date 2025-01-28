@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug lc-3",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "/home/bek/PersonalP-j/Mini-Virtual-Machine/lc-3",
+        "args": ["hello-world.obj"],
+        "stopAtEntry": false,
+        "cwd": "/home/bek/PersonalP-j/Mini-Virtual-Machine/",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "gdb",
+        "setupCommands": [
+          {
+            "description": "Enable pretty-printing",
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ],
+        "preLaunchTask": "Build lc-3 for Debug"
+      }
+    ]
+  }
+  

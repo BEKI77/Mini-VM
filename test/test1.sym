@@ -1,0 +1,10 @@
+// Symbol table
+// Scope level 0:
+//	Symbol Name       Page Address
+//	----------------  ------------
+//	INPUT_LOOP        3003
+//	PRINT_OUTPUT      3009
+//	PROMPT            300E
+//	NEWLINE           301B
+//	BUFFER            301D
+
