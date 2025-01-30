@@ -17,7 +17,7 @@ The Mini Virtual Machine is a lightweight and efficient virtual machine designed
 ### Installation
 1. Clone the repository:
     ```sh
-    git clone https://github.com/yourusername/Mini-Virtual-Machine.git
+    git clone https://github.com/BEKI77/Mini-Virtual-Machine.git
     ```
 2. Navigate to the project directory:
     ```sh
